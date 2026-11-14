@@ -67,6 +67,7 @@ function moveTo(value,automatic=false){
   const previous=state.step;
   state.step=Math.max(0,Math.min(state.timeline.events.length,Number(value)||0));
   state.prepared=false;state.awardTeamId=null;
+  if(state.step===0)awards.resetProgress();
   state.finished=state.step===state.timeline.events.length&&state.step>0;
   if(state.finished){clearTimeout(state.timer);state.timer=null;state.playing=false;}
   const motionTeamId=state.timeline.events[(state.step>previous?state.step:previous)-1]?.teamId;
@@ -102,7 +103,7 @@ function applyConfig(event){
   try{
     const config=validatedConfig();
     const timeline=buildTimeline(state.contest,{freeze:configFreeze(config),from:config.from,to:config.to});
-    stop();state.config=config;state.timeline=timeline;state.step=0;state.prepared=false;state.awardTeamId=null;state.finished=false;
+    stop();state.config=config;state.timeline=timeline;state.step=0;state.prepared=false;state.awardTeamId=null;state.finished=false;awards.resetProgress();
     $('settings-error').hidden=true;render();toast('Настройки применены. Раскрытие начнётся с первого шага.');
   }catch(error){text('settings-error',error.message);$('settings-error').hidden=false;}
 }
@@ -190,10 +191,10 @@ async function importFiles(fileList){
 function render({follow=false,motionTeamId}={}){
   if(!state.contest)return;
   state.rows=state.contest.rosterOnly?state.contest.teams.map(team=>({team,rank:null,solved:null,penalty:null,cells:{}})):scoreboard(state.contest,{freeze:freezeMinute(),events:state.timeline.events,step:state.step});
+  awards.observe();
   renderSummary();
   if(state.view==='roster')renderRoster();else if(state.view==='board')renderBoard({follow,motionTeamId});else renderSubmissions();
   renderPlayback();if($('team-dialog').open&&state.selectedTeam)renderTeam();
-  awards.observe();
 }
 
 function syncRegistryDetails(){
@@ -433,7 +434,7 @@ window.addEventListener('dragover',event=>{if([...event.dataTransfer?.types??[]]
 window.addEventListener('dragleave',event=>{if([...event.dataTransfer?.types??[]].includes('Files')){dragDepth=Math.max(0,dragDepth-1);if(!dragDepth)$('drop-overlay').hidden=true;}});
 window.addEventListener('drop',event=>{event.preventDefault();dragDepth=0;$('drop-overlay').hidden=true;if(event.dataTransfer?.files.length)importFiles(event.dataTransfer.files);});
 
-const awards=mountAwards({getContest:()=>state.contest,getRows:()=>state.contest?.rosterOnly?[]:state.rows,pause:()=>{const playing=state.playing;stop();return playing;},resume:()=>{if(!state.playing)play();},onChange:()=>{state.awardTeamId=null;if(state.contest?.rosterOnly)syncRegistryDetails();render();},onClose:renderPlayback,notify:toast});
+const awards=mountAwards({getContest:()=>state.contest,getRows:()=>state.contest?.rosterOnly?[]:state.rows,getStep:()=>state.step,getAwardTeamId:()=>state.awardTeamId,pause:()=>{const playing=state.playing;stop();return playing;},resume:()=>{if(!state.playing)play();},onChange:()=>{state.awardTeamId=null;if(state.contest?.rosterOnly)syncRegistryDetails();render();},onClose:()=>render(),notify:toast});
 $('team-edit-details').addEventListener('click',()=>{$('team-dialog').close();awards.openSettings(state.selectedTeam);});
 $('dataset-select').replaceChildren(...Object.entries(SITE_CONFIG.datasets).map(([key,dataset])=>{const option=node('option','',dataset.label);option.value=key;return option;}));
 $('dataset-select').value=SITE_CONFIG.defaultDataset;

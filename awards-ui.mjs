@@ -1,4 +1,4 @@
-import {normalizeRules,emptyRules,honorsForRows,finalizedTeamIds,ceremonyEntries,nextCeremonyEntry,parseTeamDetailsCSV,contestKey} from './awards.mjs';
+import {normalizeRules,emptyRules,honorsForRows,pruneCeremonyHistory,ceremonyEntries,nextCeremonyEntry,parseTeamDetailsCSV,contestKey} from './awards.mjs';
 import {shortName,teamInfo} from './engine.mjs';
 import {decodeText} from './zip.mjs';
 import {validateRosterMembers} from './roster.mjs';
@@ -9,12 +9,12 @@ function el(tag,cls,text){const n=document.createElement(tag);if(cls)n.className
 function download(name,text){const url=URL.createObjectURL(new Blob(['\uFEFF'+text],{type:'text/csv;charset=utf-8'}));const link=el('a');link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 const csv=value=>{let text=String(value??'');if(/^[=+\-@\t\r]/.test(text))text="'"+text;return '"'+text.replaceAll('"','""')+'"';};
 
-export function mountAwards({getContest,getRows,pause,resume,onChange,onClose=()=>{},notify}){
- let rules=emptyRules(),details={},draft={},auto=true,key='',seen=new Set(),entries=[],index=0,preview=false,autoShow=false,resumable=false,rosterMode=false;
+export function mountAwards({getContest,getRows,getStep=()=>0,getAwardTeamId=()=>null,pause,resume,onChange,onClose=()=>{},notify}){
+ let rules=emptyRules(),details={},draft={},auto=true,key='',seen=new Map(),entries=[],index=0,preview=false,autoShow=false,resumable=false,rosterMode=false;
  const safeDetails=(data,teams)=>Object.fromEntries(teams.filter(team=>data?.[team.id]).map(team=>[team.id,{...Object.fromEntries(['coach','members','organization'].map(field=>[field,typeof data[team.id][field]==='string'?data[team.id][field].slice(0,4000):''])),rosterReviewed:data[team.id].rosterReviewed===true}]));
  function persist(){try{localStorage.setItem(key,JSON.stringify({rules,details,auto}));}catch{notify('Настройки работают, но браузер не разрешил сохранить их после закрытия вкладки.',true);}}
  function loadContest(contest){
-  rules=emptyRules();details=Object.fromEntries(contest.teams.filter(team=>team.rosterDetails).map(team=>[team.id,{...team.rosterDetails}]));auto=true;rosterMode=false;seen=new Set();key=contestKey(contest);
+  rules=emptyRules();details=Object.fromEntries(contest.teams.filter(team=>team.rosterDetails).map(team=>[team.id,{...team.rosterDetails}]));auto=true;rosterMode=false;seen=new Map();key=contestKey(contest);
   try{const saved=JSON.parse(localStorage.getItem(key));if(saved){rules=normalizeRules(saved.rules,contest.teams.length);const overrides=safeDetails(saved.details,contest.teams);for(const [id,meta] of Object.entries(overrides))details[id]={...details[id],...meta};auto=saved.auto!==false;}}catch{}
   $('awards-dialog').close();$('ceremony-dialog').close();
  }
@@ -49,7 +49,7 @@ export function mountAwards({getContest,getRows,pause,resume,onChange,onClose=()
  function photoMode(enabled){$('ceremony-dialog').classList.toggle('photo-mode',enabled);$('ceremony-photo').setAttribute('aria-pressed',String(enabled));if(enabled&&$('ceremony-dialog').open)$('ceremony-dialog').focus();}
  function renderCard(){
   const row=entries[index];$('ceremony-card').hidden=!row;$('ceremony-empty').hidden=!!row;
-  if(row&&!preview&&!rosterMode)seen.add(row.team.id);
+  if(row&&!preview&&!rosterMode&&!seen.has(row.team.id))seen.set(row.team.id,getStep());
   $('ceremony-select').replaceChildren(...entries.map((entry,i)=>{const option=el('option','',(entry.rank==null?'':entry.rank+'. ')+displayName(entry.team));option.value=i;return option;}));$('ceremony-select').value=index;$('ceremony-select').disabled=!row;
   $('ceremony-mode').textContent=rosterMode?(getContest().label||'Текущий тур')+' · составы команд':preview?'Предварительный показ · текущие места':autoShow?'Итоговое место определено':'Награждение · итоговые места';
   $('ceremony-counter').textContent=row?(index+1)+' / '+entries.length:'';$('ceremony-previous').disabled=index===0||!row;$('ceremony-next').disabled=!row;$('ceremony-next').textContent=index===entries.length-1?'К таблице →':'Следующая команда →';$('ceremony-resume').hidden=!resumable;
@@ -78,13 +78,14 @@ export function mountAwards({getContest,getRows,pause,resume,onChange,onClose=()
  function showPending(teamId){
   if($('awards-dialog').open||$('ceremony-dialog').open)return false;
   const row=pendingEntry();if(!row||(teamId!==undefined&&row.team.id!==teamId))return false;
-  resumable=!!pause();rosterMode=false;entries=[row];index=0;preview=false;autoShow=true;seen.add(row.team.id);photoMode(true);renderCard();$('ceremony-dialog').showModal();return true;
+  resumable=!!pause();rosterMode=false;entries=[row];index=0;preview=false;autoShow=true;photoMode(true);renderCard();$('ceremony-dialog').showModal();return true;
  }
  function observe(){
   if(getContest()?.rosterOnly)return;
-  const final=finalizedTeamIds(getRows());seen=new Set([...seen].filter(id=>final.has(id)));
+  seen=pruneCeremonyHistory(getRows(),seen,getStep());
  }
- function decorations(){if(getContest()?.rosterOnly)return new Map();const rows=getRows(),final=finalizedTeamIds(rows),honors=honorsForRows(rows,rules);return new Map([...honors].filter(([id])=>final.has(id)));}
+ function decorations(){if(getContest()?.rosterOnly)return new Map();const announcedIds=new Set(seen.keys());const selected=getAwardTeamId();if(selected!==null)announcedIds.add(selected);return honorsForRows(getRows(),rules,{announcedIds});}
+ function resetProgress(){seen.clear();}
  function setTeamDetails(id,meta){if(!getContest().teams.some(team=>team.id===id))return;details[id]={...details[id],...meta};persist();onChange();}
 
  $('awards-open').addEventListener('click',()=>openSettings());$('ceremony-open').addEventListener('click',openCeremony);$('awards-form').addEventListener('submit',saveSettings);$('metadata-search').addEventListener('input',renderDetails);
@@ -100,5 +101,5 @@ export function mountAwards({getContest,getRows,pause,resume,onChange,onClose=()
  $('ceremony-photo').addEventListener('click',()=>photoMode(true));
  $('ceremony-preview').addEventListener('click',()=>{preview=true;autoShow=false;index=0;refreshEntries();});$('ceremony-settings').addEventListener('click',()=>{$('ceremony-dialog').close();openSettings();});$('ceremony-resume').addEventListener('click',()=>{closeCeremony();resume();});
  $('ceremony-dialog').addEventListener('keydown',event=>{if(event.target.tagName==='SELECT')return;if(event.key==='ArrowRight'||event.code==='Space'){event.preventDefault();event.stopPropagation();if(!event.repeat)nextCard();}else if(event.key==='ArrowLeft'){event.preventDefault();event.stopPropagation();if(!event.repeat){index=Math.max(0,index-1);renderCard();}}});
- return {loadContest,observe,decorations,openSettings,showRosterCard,showPending,pendingEntry,hasPending:()=>!!pendingEntry(),setTeamDetails,detailsFor:id=>details[id]??{},rules:()=>rules};
+ return {loadContest,observe,decorations,resetProgress,openSettings,showRosterCard,showPending,pendingEntry,hasPending:()=>!!pendingEntry(),setTeamDetails,detailsFor:id=>details[id]??{},rules:()=>rules};
 }
