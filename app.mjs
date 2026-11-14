@@ -275,7 +275,7 @@ function renderBoard({follow=false,motionTeamId}={}){
     const teamCell=node('td','team-cell'),name=node('button','team-name',row.team.name);name.type='button';name.title=row.team.name;name.dataset.team=row.team.id;teamCell.append(name);
     const honor=decorations.get(row.team.id);
     if(honor?.degree){teamCell.classList.add('award-'+honor.degree);const mark=node('span','honor-mark',['','I','II','III'][honor.degree]);mark.title='Диплом '+['','I','II','III'][honor.degree]+' степени';mark.setAttribute('role','img');mark.setAttribute('aria-label',mark.title);teamCell.append(mark);}
-    if(honor?.qualified||honor?.wildCard){teamCell.classList.add('is-qualified');const mark=node('span','qualified-mark',honor.qualified?'→':'W');mark.title=honor.qualified?'Проходит дальше':'Wild card';mark.setAttribute('role','img');mark.setAttribute('aria-label',mark.title);teamCell.append(mark);}
+    if(honor?.qualified||honor?.wildCard){teamCell.classList.add('is-qualified');const mark=node('span','qualified-mark',honor.qualified?'→':'W');mark.title=(honor.qualified?'Проходит дальше':'Wild card')+' · место в отборе: '+honor.qualifyingRank;mark.setAttribute('role','img');mark.setAttribute('aria-label',mark.title);teamCell.append(mark);}
     tr.append(teamCell);
     for(const problem of state.contest.problems){
       const cell=row.cells[problem],td=node('td'),el=node('div','problem-cell');

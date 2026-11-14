@@ -41,6 +41,16 @@ export function honorsForRank(rank,rules){
  return {degree:rules.degrees.find(d=>rank>=d.from&&rank<=d.to)?.degree??null,qualified:(rules.qualifyUntil>0&&rank<=rules.qualifyUntil)||rules.qualifyingPlaces.includes(rank),wildCard:rules.wildCardPlaces.includes(rank)};
 }
 
+export function honorsForRows(rows,rules){
+ const eligible=rows.filter(row=>!row.team.name.trimStart().startsWith('*')),ranks=new Map();
+ eligible.forEach((row,index)=>{const previous=eligible[index-1];ranks.set(row.team.id,previous?.rank===row.rank?ranks.get(previous.team.id):index+1);});
+ return new Map(rows.map(row=>{
+  const diploma=honorsForRank(row.rank,rules),qualifyingRank=ranks.get(row.team.id)??null;
+  const selection=qualifyingRank===null?{qualified:false,wildCard:false}:honorsForRank(qualifyingRank,rules);
+  return [row.team.id,{degree:diploma.degree,qualified:selection.qualified,wildCard:selection.wildCard,qualifyingRank}];
+ }));
+}
+
 export function finalizedTeamIds(rows){
  const last=rows.findLastIndex(row=>Object.values(row.cells).some(cell=>cell.pending>0));
  if(last<0)return new Set(rows.map(row=>row.team.id));
@@ -48,8 +58,8 @@ export function finalizedTeamIds(rows){
 }
 
 export function ceremonyEntries(rows,rules,{preview=false}={}){
- const final=finalizedTeamIds(rows);
- return rows.filter(row=>preview||final.has(row.team.id)).map(row=>({...row,honors:honorsForRank(row.rank,rules)})).filter(row=>row.honors.degree||row.honors.qualified||row.honors.wildCard).sort((a,b)=>b.rank-a.rank||a.team.id.localeCompare(b.team.id,'en',{numeric:true}));
+ const final=finalizedTeamIds(rows),honors=honorsForRows(rows,rules);
+ return rows.filter(row=>preview||final.has(row.team.id)).map(row=>({...row,honors:honors.get(row.team.id)})).filter(row=>row.honors.degree||row.honors.qualified||row.honors.wildCard).sort((a,b)=>b.rank-a.rank||a.team.id.localeCompare(b.team.id,'en',{numeric:true}));
 }
 
 export function nextCeremonyEntry(rows,rules,seen){

@@ -1,4 +1,4 @@
-import {normalizeRules,emptyRules,honorsForRank,finalizedTeamIds,ceremonyEntries,nextCeremonyEntry,parseTeamDetailsCSV,contestKey} from './awards.mjs';
+import {normalizeRules,emptyRules,honorsForRows,finalizedTeamIds,ceremonyEntries,nextCeremonyEntry,parseTeamDetailsCSV,contestKey} from './awards.mjs';
 import {shortName,teamInfo} from './engine.mjs';
 import {decodeText} from './zip.mjs';
 import {validateRosterMembers} from './roster.mjs';
@@ -56,7 +56,7 @@ export function mountAwards({getContest,getRows,pause,resume,onChange,onClose=()
   if(!row){const configured=rules.degrees.length||rules.qualifyUntil||rules.qualifyingPlaces.length||rules.wildCardPlaces.length;$('ceremony-empty-text').textContent=configured?'У награждаемых команд ещё могут измениться места. Продолжите разморозку или откройте явно предварительный показ.':'Сначала задайте диапазоны степеней и места прошедших команд в настройках.';$('ceremony-preview').hidden=!configured||preview;return;}
   const meta=details[row.team.id]??{},honors=row.honors;$('ceremony-card').className='ceremony-card'+(honors.degree?' diploma-'+honors.degree:'')+(honors.qualified||honors.wildCard?' qualified-card':'');
   $('ceremony-ribbon').textContent=honors.qualified?'Проходит в следующий этап':honors.wildCard?'Приглашение в следующий этап · Wild card':'Диплом олимпиады';
-  const badges=[];if(honors.degree)badges.push(el('span','degree-medallion',roman[honors.degree]));if(honors.qualified)badges.push(el('span','qualification-badge','Прошли дальше'));if(honors.wildCard)badges.push(el('span','qualification-badge','Wild card'));$('ceremony-badges').replaceChildren(...badges);
+  const badges=[];if(honors.degree)badges.push(el('span','degree-medallion',roman[honors.degree]));if(honors.qualified)badges.push(el('span','qualification-badge','Прошли дальше · '+honors.qualifyingRank+'-е в отборе'));if(honors.wildCard)badges.push(el('span','qualification-badge','Wild card · '+honors.qualifyingRank+'-е в отборе'));$('ceremony-badges').replaceChildren(...badges);
   $('ceremony-team-name').textContent=displayName(row.team);$('ceremony-organization').textContent=meta.organization||'';
   $('ceremony-score').hidden=rosterMode;
   if(rosterMode)$('ceremony-ribbon').textContent='Команда текущего тура';
@@ -85,7 +85,7 @@ export function mountAwards({getContest,getRows,pause,resume,onChange,onClose=()
   const final=finalizedTeamIds(getRows());seen=new Set([...seen].filter(id=>final.has(id)));
   if(advance)showPending();
  }
- function decorations(){if(getContest()?.rosterOnly)return new Map();const final=finalizedTeamIds(getRows());return new Map(getRows().filter(row=>final.has(row.team.id)).map(row=>[row.team.id,honorsForRank(row.rank,rules)]));}
+ function decorations(){if(getContest()?.rosterOnly)return new Map();const rows=getRows(),final=finalizedTeamIds(rows),honors=honorsForRows(rows,rules);return new Map([...honors].filter(([id])=>final.has(id)));}
  function setTeamDetails(id,meta){if(!getContest().teams.some(team=>team.id===id))return;details[id]={...details[id],...meta};persist();onChange();}
 
  $('awards-open').addEventListener('click',()=>openSettings());$('ceremony-open').addEventListener('click',openCeremony);$('awards-form').addEventListener('submit',saveSettings);$('metadata-search').addEventListener('input',renderDetails);
