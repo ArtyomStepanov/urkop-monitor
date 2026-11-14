@@ -51,7 +51,20 @@ export function stepPlayback({step,prepared},total,direction=1){
 }
 
 export function revealedCells(events = [], step = events.length) {
-  return new Set(events.slice(0, Math.max(0, step)).map(e => cellKey(e.teamId, e.problem)));
+  return new Set(events.slice(0, Math.max(0, step)).flatMap(e => (e.problems??[e.problem]).map(problem=>cellKey(e.teamId,problem))));
+}
+
+export function revealProgress(events,step){
+  const counts=[0];
+  for(const event of events)counts.push(counts.at(-1)+(event.problems??[event.problem]).length);
+  return {opened:counts[Math.max(0,Math.min(events.length,step))],total:counts.at(-1),counts};
+}
+
+export function progressStep(counts,target,previous,currentStep){
+  if(target===previous)return currentStep;
+  if(target<previous)return Math.max(0,counts.findLastIndex(count=>count<=target));
+  const step=counts.findIndex(count=>count>=target);
+  return step<0?counts.length-1:step;
 }
 
 function scoreWithRevealed(contest, freeze, revealed) {
@@ -85,7 +98,7 @@ export function scoreboard(contest, { freeze = 240, events = [], step = events.l
   return scoreWithRevealed(contest, final ? Infinity : freeze, revealedCells(events,step));
 }
 
-export function buildTimeline(contest, { freeze = 240, from = contest.teams.length, to = 1 } = {}) {
+export function buildTimeline(contest, { freeze = 240, from = contest.teams.length, to = 1, random = Math.random } = {}) {
   if ((freeze !== Infinity && !Number.isFinite(freeze)) || freeze < 0) throw new Error('Укажите корректную минуту заморозки.');
   if (![from,to].every(n=>Number.isInteger(n)&&n>=1&&n<=contest.teams.length)) throw new Error(`Места должны быть от 1 до ${contest.teams.length}.`);
   const low = Math.min(from,to), high = Math.max(from,to);
@@ -96,21 +109,34 @@ export function buildTimeline(contest, { freeze = 240, from = contest.teams.leng
   const events = [];
   const groups = new Map();
   for(const submission of contest.submissions){const key=cellKey(submission.teamId,submission.problem);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(submission);}
-  while (true) {
-    const row = rows.findLast(row => selectedIds.has(row.team.id) && Object.values(row.cells).some(c=>c.pending>0));
-    if (!row) break;
-    const [problem, cell] = Object.entries(row.cells).filter(([,c])=>c.pending>0).sort((a,b)=>a[1].firstPending-b[1].firstPending||a[0].localeCompare(b[0]))[0];
-    const beforeRank = row.rank;
+  const results=new Map();
+  for(const [key,submissions] of groups){
     const result=emptyCell();
-    for(const submission of groups.get(cellKey(row.team.id,problem))){
+    for(const submission of submissions){
       if(submission.ignored)continue;
       result.attempts++;
       if(submission.accepted){result.solved=true;result.time=submission.minute;result.penalty=submission.minute+20*result.wrong;break;}
       result.wrong++;
     }
-    row.cells[problem]=result;
-    if(result.solved){row.solved++;row.penalty+=result.penalty;rankRows(rows);}
-    events.push({teamId:row.team.id,problem,beforeRank,afterRank:row.rank,accepted:result.solved,minute:result.time??cell.firstPending,attempts:cell.pending,solved:row.solved,penalty:row.penalty});
+    results.set(key,result);
+  }
+  while (true) {
+    const row = rows.findLast(row => selectedIds.has(row.team.id) && Object.values(row.cells).some(c=>c.pending>0));
+    if (!row) break;
+    const pending=Object.entries(row.cells).filter(([,cell])=>cell.pending>0);
+    const pluses=pending.filter(([problem])=>results.get(cellKey(row.team.id,problem)).solved);
+    const batch=pluses.length?[pluses[Math.floor(random()*pluses.length)]]:pending;
+    const problems=batch.map(([problem])=>problem);
+    const beforeRank = row.rank;
+    let attempts=0;
+    for(const [problem,cell] of batch){
+      const result=results.get(cellKey(row.team.id,problem));
+      row.cells[problem]=result;attempts+=cell.pending;
+      if(result.solved){row.solved++;row.penalty+=result.penalty;}
+    }
+    if(pluses.length)rankRows(rows);
+    const minute=pluses.length?row.cells[problems[0]].time:Math.min(...batch.map(([,cell])=>cell.firstPending));
+    events.push({teamId:row.team.id,problem:problems[0],problems,beforeRank,afterRank:row.rank,accepted:pluses.length>0,minute,attempts,solved:row.solved,penalty:row.penalty});
   }
   return { events, selectedIds:[...selectedIds], frozenRanks:Object.fromEntries(frozenRanks), frozenSolved, low, high };
 }

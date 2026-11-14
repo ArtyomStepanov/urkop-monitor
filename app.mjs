@@ -1,4 +1,4 @@
-import {parseContest,scoreboard,buildTimeline,stepPlayback,revealedCells,submissionIsVisible,shortName,teamInfo,cellKey} from './engine.mjs';
+import {parseContest,scoreboard,buildTimeline,stepPlayback,revealProgress,progressStep,revealedCells,submissionIsVisible,shortName,teamInfo,cellKey} from './engine.mjs';
 import {readTimusZip,decodeText} from './zip.mjs';
 import {mountAwards} from './awards-ui.mjs';
 import {captureRowPositions,animateRows,clearRowMotion} from './row-motion.mjs';
@@ -8,7 +8,7 @@ import {SITE_CONFIG} from './site-config.mjs';
 const $=id=>document.getElementById(id);
 const format=new Intl.NumberFormat('ru-RU');
 const state={contest:null,timeline:null,config:{duration:300,hidden:60,from:68,to:1},step:0,prepared:false,playing:false,view:'board',query:'',rows:[],timer:null,selectedTeam:null,importing:false,finished:false,currentRoster:null};
-let toastTimer,dragDepth=0,importVersion=0,awardFrameTimer;
+let toastTimer,dragDepth=0,importVersion=0,lastScrubberTarget=null;
 
 function icon(name){
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
@@ -21,29 +21,30 @@ const configFreeze=config=>config.hidden===0?Infinity:config.duration-config.hid
 const freezeMinute=()=>configFreeze(state.config);
 const currentEvent=()=>state.step>0?state.timeline.events[state.step-1]:null;
 const activeEvent=()=>state.prepared?state.timeline?.events[state.step]:currentEvent();
+const eventProblems=event=>event.problems??[event.problem];
 const normalized=value=>String(value).toLocaleLowerCase('ru');
 const matches=team=>!state.query||normalized(team.name).includes(state.query)||team.id.includes(state.query);
 
 function visibility(){return {freeze:freezeMinute(),revealed:revealedCells(state.timeline.events,state.step),completeIds:state.finished?state.timeline.selectedIds:[]};}
-function stop(){clearTimeout(state.timer);clearTimeout(awardFrameTimer);state.timer=null;state.playing=false;renderPlayback();}
+function stop(){clearTimeout(state.timer);state.timer=null;state.playing=false;renderPlayback();}
 function schedule(){clearTimeout(state.timer);if(state.playing)state.timer=setTimeout(()=>{advance(1,true);if(state.playing)schedule();},Number($('speed').value));}
 function play(){
   if(!state.contest||state.importing)return;
   if(state.playing){stop();return;}
   if(!state.timeline.events.length){toast('В выбранном диапазоне нет задач со скрытыми посылками.');return;}
-  if(state.finished)moveTo(0);
+  if(state.finished&&!awards.hasPending())moveTo(0);
   state.playing=true;renderPlayback();advance(1,true);schedule();
 }
 function advance(direction=1,automatic=false){
   if(!state.timeline||state.importing||state.contest?.rosterOnly)return;
   if(!automatic)stop();
-  if(direction>0&&state.step>=state.timeline.events.length&&!state.prepared){awards.showPending();renderPlayback();return;}
-  const previous=state.step;
+  if(direction>0&&awards.hasPending()){if(automatic)stop();else{awards.showPending();renderPlayback();}return;}
   const next=stepPlayback(state,state.timeline.events.length,direction);
   state.step=next.step;state.prepared=next.prepared;
   state.finished=!state.prepared&&state.step===state.timeline.events.length&&state.step>0;
   if(state.finished){clearTimeout(state.timer);state.timer=null;state.playing=false;}
-  render({follow:direction>0,advance:state.step>previous,motionTeamId:activeEvent()?.teamId});
+  render({follow:direction>0,motionTeamId:activeEvent()?.teamId});
+  if(automatic&&awards.hasPending())stop();
 }
 function moveTo(value,automatic=false){
   if(!state.timeline)return;
@@ -54,7 +55,7 @@ function moveTo(value,automatic=false){
   state.finished=state.step===state.timeline.events.length&&state.step>0;
   if(state.finished){clearTimeout(state.timer);state.timer=null;state.playing=false;}
   const motionTeamId=state.timeline.events[(state.step>previous?state.step:previous)-1]?.teamId;
-  render({follow:state.step>previous,advance:state.step>previous,motionTeamId});
+  render({follow:state.step>previous,motionTeamId});
 }
 
 function validatedConfig(){
@@ -171,15 +172,13 @@ async function importFiles(fileList){
   }finally{if(version===importVersion){state.importing=false;renderPlayback();}$('file-input').value='';}
 }
 
-function render({follow=false,advance=false,motionTeamId}={}){
+function render({follow=false,motionTeamId}={}){
   if(!state.contest)return;
-  clearTimeout(awardFrameTimer);
   state.rows=state.contest.rosterOnly?state.contest.teams.map(team=>({team,rank:null,solved:null,penalty:null,cells:{}})):scoreboard(state.contest,{freeze:freezeMinute(),events:state.timeline.events,step:state.step});
   renderSummary();
   if(state.view==='roster')renderRoster();else if(state.view==='board')renderBoard({follow,motionTeamId});else renderSubmissions();
   renderPlayback();if($('team-dialog').open&&state.selectedTeam)renderTeam();
   awards.observe();
-  if(advance){const at=state.step;awardFrameTimer=setTimeout(()=>{if(state.step===at)awards.observe({advance:true});},Math.min(600,Number($('speed').value)*.65)+50);}
 }
 
 function syncRegistryDetails(){
@@ -284,7 +283,6 @@ function renderBoard({follow=false,motionTeamId}={}){
       else if(cell.wrong){el.classList.add('wrong');el.textContent='–'+cell.wrong;td.title=problem+': неверных попыток — '+cell.wrong;}
       else{el.classList.add('empty');el.textContent='\u00a0';td.title=problem+': посылок нет';}
       if(revealed.has(cellKey(row.team.id,problem)))el.classList.add('revealed');
-      if(state.prepared&&event?.teamId===row.team.id&&event.problem===problem)el.classList.add('selected-task');
       td.append(el);tr.append(td);
     }
     const solved=node('td','solved-value',row.solved);
@@ -315,24 +313,26 @@ function renderSubmissions(){
 
 function renderPlayback(){
   const ready=!!state.contest&&!state.importing&&!state.contest.rosterOnly,total=state.timeline?.events.length??0,event=currentEvent(),target=activeEvent();
-  $('play').disabled=!ready||!total;$('next').disabled=!ready||(state.step>=total&&!awards.hasPending());$('previous').disabled=!ready||(state.step===0&&!state.prepared);
+  const pendingAward=ready&&awards.hasPending(),nextHint=pendingAward?'→ показать диплом':state.finished?'диапазон раскрыт':'→ выбрать следующую команду';
+  $('play').disabled=!ready||!total||pendingAward;$('next').disabled=!ready||(state.step>=total&&!pendingAward);$('previous').disabled=!ready||(state.step===0&&!state.prepared);
   $('next').title=state.prepared?'Показать результат (→)':'Выбрать команду (→)';
-  if(state.finished&&awards.hasPending())$('next').title='Показать следующий диплом (→)';
-  $('next').dataset.phase=state.prepared?'reveal':'select';
+  if(pendingAward)$('next').title='Показать диплом (→)';
+  $('next').dataset.phase=pendingAward?'award':state.prepared?'reveal':'select';
   $('finish').disabled=!ready||state.finished;$('reset').disabled=!ready;$('scrubber').disabled=!ready||!total;
-  $('scrubber').max=total;$('scrubber').value=state.step;text('step-counter',`${state.step} / ${total}`);
+  const progress=revealProgress(state.timeline?.events??[],state.step);
+  $('scrubber').max=progress.total;$('scrubber').value=progress.opened;text('step-counter',`${progress.opened} / ${progress.total}`);
+  $('step-counter').title=`Раскрыто задач: ${progress.opened} из ${progress.total}`;
   $('play').replaceChildren(icon(state.playing?'pause':'play'),node('span','',state.playing?'Пауза':state.finished?'Ещё раз':'Старт'));
   $('play').classList.toggle('playing',state.playing);$('play').setAttribute('aria-label',state.playing?'Приостановить разморозку':state.finished?'Повторить разморозку':'Начать разморозку');
   if(state.importing)text('playback-caption','Загружаем данные…');
   else if(state.contest?.rosterOnly)text('playback-caption','Текущий тур: составы готовы. Результаты подключаются отдельным логом.');
-  else if(state.finished)text('playback-caption','Выбранный диапазон раскрыт');
-  else if(state.prepared&&target){const team=state.contest.teams.find(t=>t.id===target.teamId);text('playback-caption',`${shortName(team.name)} · ${target.problem} · → показать результат`);}
-  else if(event){const team=state.contest.teams.find(t=>t.id===event.teamId);text('playback-caption',`${shortName(team.name)} · ${event.problem} · ${event.accepted?'принято':'не принято'} · → выбрать следующую команду`);}
-  else text('playback-caption',total?'→ выбрать команду, ещё → показать результат':'Нет скрытых задач в этом диапазоне');
-  const percent=total?state.step/total*100:0;$('scrubber').style.background=`linear-gradient(to right,#6983b7 ${percent}%,#ccc ${percent}%)`;
+  else if(state.prepared&&target){const team=state.contest.teams.find(t=>t.id===target.teamId);text('playback-caption',`${shortName(team.name)} · → показать результат`);}
+  else if(event){const team=state.contest.teams.find(t=>t.id===event.teamId);text('playback-caption',`${shortName(team.name)} · ${eventProblems(event).join(', ')} · ${event.accepted?'принято':'не принято'} · ${nextHint}`);}
+  else text('playback-caption',pendingAward?'→ показать готовый диплом':total?'→ выбрать команду, ещё → показать результат':'Нет скрытых задач в этом диапазоне');
+  const percent=progress.total?progress.opened/progress.total*100:0;$('scrubber').style.background=`linear-gradient(to right,#6983b7 ${percent}%,#ccc ${percent}%)`;
   $('apply-settings').disabled=!ready;$('upload-open').disabled=state.importing;$('load-demo').disabled=state.importing;$('dataset-select').disabled=state.importing;
   if(state.contest)renderSummary();
-  text('announcement',state.prepared&&target?`Выбрана ${shortName(state.contest.teams.find(t=>t.id===target.teamId).name)}, задача ${target.problem}. Нажмите стрелку вправо, чтобы показать результат.`:event?`${shortName(state.contest.teams.find(t=>t.id===event.teamId).name)}, задача ${event.problem}: ${event.accepted?'принято':'не принято'}, место ${event.afterRank}.`:'');
+  text('announcement',state.prepared&&target?`Выбрана ${shortName(state.contest.teams.find(t=>t.id===target.teamId).name)}. Нажмите стрелку вправо, чтобы показать результат.`:event?`${shortName(state.contest.teams.find(t=>t.id===event.teamId).name)}, ${eventProblems(event).length===1?'задача':'задачи'} ${eventProblems(event).join(', ')}: ${event.accepted?'принято':'не принято'}, место ${event.afterRank}.`:'');
 }
 
 function openTeam(id){
@@ -380,8 +380,11 @@ $('play').addEventListener('click',play);
 $('previous').addEventListener('click',()=>advance(-1));
 $('next').addEventListener('click',()=>advance());
 $('reset').addEventListener('click',()=>{moveTo(0);state.finished=false;render();$('table-scroll').scrollTop=0;});
-$('finish').addEventListener('click',()=>{const total=state.timeline.events.length;moveTo(total);if(!total){state.finished=true;render({advance:true});}toast('Выбранные места раскрыты. Остальные команды сохраняют заморозку.');});
-$('scrubber').addEventListener('input',event=>moveTo(event.target.value));
+$('finish').addEventListener('click',()=>{const total=state.timeline.events.length;moveTo(total);if(!total){state.finished=true;render();}toast('Выбранные места раскрыты. Остальные команды сохраняют заморозку.');});
+$('scrubber').addEventListener('pointerdown',()=>{lastScrubberTarget=Number($('scrubber').value);});
+for(const type of ['pointerup','pointercancel'])window.addEventListener(type,()=>{lastScrubberTarget=null;});
+for(const type of ['keydown','blur'])$('scrubber').addEventListener(type,()=>{lastScrubberTarget=null;});
+$('scrubber').addEventListener('input',event=>{const target=Number(event.target.value),progress=revealProgress(state.timeline.events,state.step);const step=progressStep(progress.counts,target,lastScrubberTarget??progress.opened,state.step);if(lastScrubberTarget!==null)lastScrubberTarget=target;moveTo(step);});
 $('speed').addEventListener('change',schedule);
 $('search').addEventListener('input',event=>{state.query=normalized(event.target.value.trim());render();$('table-scroll').scrollTop=0;});
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>setView(button.dataset.view)));

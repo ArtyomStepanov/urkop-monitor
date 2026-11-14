@@ -80,10 +80,9 @@ export function mountAwards({getContest,getRows,pause,resume,onChange,onClose=()
   const row=pendingEntry();if(!row)return false;
   resumable=!!pause();rosterMode=false;entries=[row];index=0;preview=false;autoShow=true;seen.add(row.team.id);photoMode(true);renderCard();$('ceremony-dialog').showModal();return true;
  }
- function observe({advance=false}={}){
+ function observe(){
   if(getContest()?.rosterOnly)return;
   const final=finalizedTeamIds(getRows());seen=new Set([...seen].filter(id=>final.has(id)));
-  if(advance)showPending();
  }
  function decorations(){if(getContest()?.rosterOnly)return new Map();const rows=getRows(),final=finalizedTeamIds(rows),honors=honorsForRows(rows,rules);return new Map([...honors].filter(([id])=>final.has(id)));}
  function setTeamDetails(id,meta){if(!getContest().teams.some(team=>team.id===id))return;details[id]={...details[id],...meta};persist();onChange();}
