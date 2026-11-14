@@ -1,4 +1,4 @@
-import {parseContest,scoreboard,buildTimeline,revealedCells,submissionIsVisible,shortName,teamInfo,cellKey} from './engine.mjs';
+import {parseContest,scoreboard,buildTimeline,stepPlayback,revealedCells,submissionIsVisible,shortName,teamInfo,cellKey} from './engine.mjs';
 import {readTimusZip,decodeText} from './zip.mjs';
 import {mountAwards} from './awards-ui.mjs';
 import {captureRowPositions,animateRows,clearRowMotion} from './row-motion.mjs';
@@ -7,7 +7,7 @@ import {SITE_CONFIG} from './site-config.mjs';
 
 const $=id=>document.getElementById(id);
 const format=new Intl.NumberFormat('ru-RU');
-const state={contest:null,timeline:null,config:{duration:300,hidden:60,from:68,to:1},step:0,playing:false,view:'board',query:'',rows:[],timer:null,selectedTeam:null,importing:false,finished:false,currentRoster:null};
+const state={contest:null,timeline:null,config:{duration:300,hidden:60,from:68,to:1},step:0,prepared:false,playing:false,view:'board',query:'',rows:[],timer:null,selectedTeam:null,importing:false,finished:false,currentRoster:null};
 let toastTimer,dragDepth=0,importVersion=0,awardFrameTimer;
 
 function icon(name){
@@ -20,24 +20,37 @@ function toast(message,error=false){clearTimeout(toastTimer);text('toast',messag
 const configFreeze=config=>config.hidden===0?Infinity:config.duration-config.hidden;
 const freezeMinute=()=>configFreeze(state.config);
 const currentEvent=()=>state.step>0?state.timeline.events[state.step-1]:null;
+const activeEvent=()=>state.prepared?state.timeline?.events[state.step]:currentEvent();
 const normalized=value=>String(value).toLocaleLowerCase('ru');
 const matches=team=>!state.query||normalized(team.name).includes(state.query)||team.id.includes(state.query);
 
 function visibility(){return {freeze:freezeMinute(),revealed:revealedCells(state.timeline.events,state.step),completeIds:state.finished?state.timeline.selectedIds:[]};}
 function stop(){clearTimeout(state.timer);clearTimeout(awardFrameTimer);state.timer=null;state.playing=false;renderPlayback();}
-function schedule(){clearTimeout(state.timer);if(state.playing)state.timer=setTimeout(()=>{moveTo(state.step+1,true);if(state.playing)schedule();},Number($('speed').value));}
+function schedule(){clearTimeout(state.timer);if(state.playing)state.timer=setTimeout(()=>{advance(1,true);if(state.playing)schedule();},Number($('speed').value));}
 function play(){
   if(!state.contest||state.importing)return;
   if(state.playing){stop();return;}
   if(!state.timeline.events.length){toast('В выбранном диапазоне нет задач со скрытыми посылками.');return;}
-  if(state.step>=state.timeline.events.length)moveTo(0);
-  state.playing=true;renderPlayback();moveTo(state.step+1,true);schedule();
+  if(state.finished)moveTo(0);
+  state.playing=true;renderPlayback();advance(1,true);schedule();
+}
+function advance(direction=1,automatic=false){
+  if(!state.timeline||state.importing||state.contest?.rosterOnly)return;
+  if(!automatic)stop();
+  if(direction>0&&state.step>=state.timeline.events.length&&!state.prepared){awards.showPending();renderPlayback();return;}
+  const previous=state.step;
+  const next=stepPlayback(state,state.timeline.events.length,direction);
+  state.step=next.step;state.prepared=next.prepared;
+  state.finished=!state.prepared&&state.step===state.timeline.events.length&&state.step>0;
+  if(state.finished){clearTimeout(state.timer);state.timer=null;state.playing=false;}
+  render({follow:direction>0,advance:state.step>previous,motionTeamId:activeEvent()?.teamId});
 }
 function moveTo(value,automatic=false){
   if(!state.timeline)return;
   if(!automatic)stop();
   const previous=state.step;
   state.step=Math.max(0,Math.min(state.timeline.events.length,Number(value)||0));
+  state.prepared=false;
   state.finished=state.step===state.timeline.events.length&&state.step>0;
   if(state.finished){clearTimeout(state.timer);state.timer=null;state.playing=false;}
   const motionTeamId=state.timeline.events[(state.step>previous?state.step:previous)-1]?.teamId;
@@ -73,14 +86,14 @@ function applyConfig(event){
   try{
     const config=validatedConfig();
     const timeline=buildTimeline(state.contest,{freeze:configFreeze(config),from:config.from,to:config.to});
-    stop();state.config=config;state.timeline=timeline;state.step=0;state.finished=false;
+    stop();state.config=config;state.timeline=timeline;state.step=0;state.prepared=false;state.finished=false;
     $('settings-error').hidden=true;render();toast('Настройки применены. Раскрытие начнётся с первого шага.');
   }catch(error){text('settings-error',error.message);$('settings-error').hidden=false;}
 }
 
 function commitContest(contest,label,config,timeline,datasetKey=null){
   if(!contest.rosterOnly&&state.currentRoster)contest=bindRoster(contest,state.currentRoster).contest;
-  stop();state.contest=contest;state.config=config;state.timeline=timeline;state.step=0;state.query='';state.selectedTeam=null;state.finished=false;
+  stop();state.contest=contest;state.config=config;state.timeline=timeline;state.step=0;state.prepared=false;state.query='';state.selectedTeam=null;state.finished=false;
   state.view=contest.rosterOnly?'roster':'board';document.body.classList.toggle('roster-only',!!contest.rosterOnly);document.title='Monitor — '+label;
   document.querySelectorAll('[data-view]').forEach(button=>{const active=button.dataset.view===state.view;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));button.disabled=!!contest.rosterOnly&&button.dataset.view!=='roster';});
   awards.loadContest(contest);
@@ -249,7 +262,7 @@ function renderBoard({follow=false,motionTeamId}={}){
     }
     $('score-head').replaceChildren(header);$('score-head').dataset.problems=state.contest.problems.join(',');
   }
-  const selected=new Set(state.timeline.selectedIds),event=currentEvent(),fragment=document.createDocumentFragment(),revealed=revealedCells(state.timeline.events,state.step);
+  const selected=new Set(state.timeline.selectedIds),event=activeEvent(),fragment=document.createDocumentFragment(),revealed=revealedCells(state.timeline.events,state.step);
   const bands=new Map();let band=0,previousSolved=null;
   for(const row of state.rows){if(previousSolved!==null&&previousSolved!==row.solved)band=1-band;bands.set(row.team.id,band);previousSolved=row.solved;}
   const rows=state.rows.filter(row=>matches(row.team));
@@ -271,6 +284,7 @@ function renderBoard({follow=false,motionTeamId}={}){
       else if(cell.wrong){el.classList.add('wrong');el.textContent='–'+cell.wrong;td.title=problem+': неверных попыток — '+cell.wrong;}
       else{el.classList.add('empty');el.textContent='\u00a0';td.title=problem+': посылок нет';}
       if(revealed.has(cellKey(row.team.id,problem)))el.classList.add('revealed');
+      if(state.prepared&&event?.teamId===row.team.id&&event.problem===problem)el.classList.add('selected-task');
       td.append(el);tr.append(td);
     }
     const solved=node('td','solved-value',row.solved);
@@ -300,8 +314,11 @@ function renderSubmissions(){
 }
 
 function renderPlayback(){
-  const ready=!!state.contest&&!state.importing&&!state.contest.rosterOnly,total=state.timeline?.events.length??0,event=currentEvent();
-  $('play').disabled=!ready||!total;$('next').disabled=!ready||state.step>=total;$('previous').disabled=!ready||state.step===0;
+  const ready=!!state.contest&&!state.importing&&!state.contest.rosterOnly,total=state.timeline?.events.length??0,event=currentEvent(),target=activeEvent();
+  $('play').disabled=!ready||!total;$('next').disabled=!ready||(state.step>=total&&!awards.hasPending());$('previous').disabled=!ready||(state.step===0&&!state.prepared);
+  $('next').title=state.prepared?'Показать результат (→)':'Выбрать команду (→)';
+  if(state.finished&&awards.hasPending())$('next').title='Показать следующий диплом (→)';
+  $('next').dataset.phase=state.prepared?'reveal':'select';
   $('finish').disabled=!ready||state.finished;$('reset').disabled=!ready;$('scrubber').disabled=!ready||!total;
   $('scrubber').max=total;$('scrubber').value=state.step;text('step-counter',`${state.step} / ${total}`);
   $('play').replaceChildren(icon(state.playing?'pause':'play'),node('span','',state.playing?'Пауза':state.finished?'Ещё раз':'Старт'));
@@ -309,12 +326,13 @@ function renderPlayback(){
   if(state.importing)text('playback-caption','Загружаем данные…');
   else if(state.contest?.rosterOnly)text('playback-caption','Текущий тур: составы готовы. Результаты подключаются отдельным логом.');
   else if(state.finished)text('playback-caption','Выбранный диапазон раскрыт');
-  else if(event){const team=state.contest.teams.find(t=>t.id===event.teamId);text('playback-caption',`${shortName(team.name)} · ${event.problem} · ${event.accepted?'принято':'не принято'}`);}
-  else text('playback-caption',total?'Всё готово к раскрытию':'Нет скрытых задач в этом диапазоне');
+  else if(state.prepared&&target){const team=state.contest.teams.find(t=>t.id===target.teamId);text('playback-caption',`${shortName(team.name)} · ${target.problem} · → показать результат`);}
+  else if(event){const team=state.contest.teams.find(t=>t.id===event.teamId);text('playback-caption',`${shortName(team.name)} · ${event.problem} · ${event.accepted?'принято':'не принято'} · → выбрать следующую команду`);}
+  else text('playback-caption',total?'→ выбрать команду, ещё → показать результат':'Нет скрытых задач в этом диапазоне');
   const percent=total?state.step/total*100:0;$('scrubber').style.background=`linear-gradient(to right,#6983b7 ${percent}%,#ccc ${percent}%)`;
   $('apply-settings').disabled=!ready;$('upload-open').disabled=state.importing;$('load-demo').disabled=state.importing;$('dataset-select').disabled=state.importing;
   if(state.contest)renderSummary();
-  text('announcement',event?`${shortName(state.contest.teams.find(t=>t.id===event.teamId).name)}, задача ${event.problem}: ${event.accepted?'принято':'не принято'}, место ${event.afterRank}`:'');
+  text('announcement',state.prepared&&target?`Выбрана ${shortName(state.contest.teams.find(t=>t.id===target.teamId).name)}, задача ${target.problem}. Нажмите стрелку вправо, чтобы показать результат.`:event?`${shortName(state.contest.teams.find(t=>t.id===event.teamId).name)}, задача ${event.problem}: ${event.accepted?'принято':'не принято'}, место ${event.afterRank}.`:'');
 }
 
 function openTeam(id){
@@ -359,8 +377,8 @@ $('table-scale').addEventListener('change',()=>{stop();render();});
 $('show-frozen-solved').addEventListener('change',()=>{stop();render();});
 window.addEventListener('resize',()=>{clearRowMotion($('score-body'));updateTableMetrics();});
 $('play').addEventListener('click',play);
-$('previous').addEventListener('click',()=>moveTo(state.step-1));
-$('next').addEventListener('click',()=>moveTo(state.step+1));
+$('previous').addEventListener('click',()=>advance(-1));
+$('next').addEventListener('click',()=>advance());
 $('reset').addEventListener('click',()=>{moveTo(0);state.finished=false;render();$('table-scroll').scrollTop=0;});
 $('finish').addEventListener('click',()=>{const total=state.timeline.events.length;moveTo(total);if(!total){state.finished=true;render({advance:true});}toast('Выбранные места раскрыты. Остальные команды сохраняют заморозку.');});
 $('scrubber').addEventListener('input',event=>moveTo(event.target.value));
@@ -383,9 +401,9 @@ document.addEventListener('keydown',event=>{
   if(['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName))return;
   if(event.code==='Space'&&document.activeElement.tagName==='BUTTON')return;
   if(!state.contest||state.importing||state.contest.rosterOnly)return;
-  if(event.code==='Space'){event.preventDefault();play();}
-  else if(event.key==='ArrowRight'){event.preventDefault();moveTo(state.step+1);}
-  else if(event.key==='ArrowLeft'){event.preventDefault();moveTo(state.step-1);}
+  if(event.code==='Space'){event.preventDefault();if(!event.repeat)play();}
+  else if(event.key==='ArrowRight'){event.preventDefault();if(!event.repeat)advance();}
+  else if(event.key==='ArrowLeft'){event.preventDefault();if(!event.repeat)advance(-1);}
   else if(event.key.toLowerCase()==='r'||event.key.toLowerCase()==='к'){event.preventDefault();moveTo(0);}
   else if(event.key==='/'){event.preventDefault();$('search').focus();}
 });
@@ -395,7 +413,7 @@ window.addEventListener('dragover',event=>{if([...event.dataTransfer?.types??[]]
 window.addEventListener('dragleave',event=>{if([...event.dataTransfer?.types??[]].includes('Files')){dragDepth=Math.max(0,dragDepth-1);if(!dragDepth)$('drop-overlay').hidden=true;}});
 window.addEventListener('drop',event=>{event.preventDefault();dragDepth=0;$('drop-overlay').hidden=true;if(event.dataTransfer?.files.length)importFiles(event.dataTransfer.files);});
 
-const awards=mountAwards({getContest:()=>state.contest,getRows:()=>state.contest?.rosterOnly?[]:state.rows,pause:()=>{const playing=state.playing;stop();return playing;},resume:()=>{if(!state.playing)play();},onChange:()=>{if(state.contest?.rosterOnly)syncRegistryDetails();render();},notify:toast});
+const awards=mountAwards({getContest:()=>state.contest,getRows:()=>state.contest?.rosterOnly?[]:state.rows,pause:()=>{const playing=state.playing;stop();return playing;},resume:()=>{if(!state.playing)play();},onChange:()=>{if(state.contest?.rosterOnly)syncRegistryDetails();render();},onClose:renderPlayback,notify:toast});
 $('team-edit-details').addEventListener('click',()=>{$('team-dialog').close();awards.openSettings(state.selectedTeam);});
 $('dataset-select').replaceChildren(...Object.entries(SITE_CONFIG.datasets).map(([key,dataset])=>{const option=node('option','',dataset.label);option.value=key;return option;}));
 $('dataset-select').value=SITE_CONFIG.defaultDataset;

@@ -52,6 +52,10 @@ export function ceremonyEntries(rows,rules,{preview=false}={}){
  return rows.filter(row=>preview||final.has(row.team.id)).map(row=>({...row,honors:honorsForRank(row.rank,rules)})).filter(row=>row.honors.degree||row.honors.qualified||row.honors.wildCard).sort((a,b)=>b.rank-a.rank||a.team.id.localeCompare(b.team.id,'en',{numeric:true}));
 }
 
+export function nextCeremonyEntry(rows,rules,seen){
+ return ceremonyEntries(rows,rules).find(row=>!seen.has(row.team.id))??null;
+}
+
 export function parseCSV(text){
  text=text.replace(/^\uFEFF/,'');
  const first=text.split(/\r?\n/,1)[0],delimiter=first.includes('\t')?'\t':first.includes(';')?';':',';

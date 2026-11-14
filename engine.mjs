@@ -44,6 +44,12 @@ export function parseContest(logText, teamsText = '') {
 
 export const cellKey = (teamId, problem) => `${teamId}:${problem}`;
 
+export function stepPlayback({step,prepared},total,direction=1){
+  if(direction<0)return prepared?{step,prepared:false}:step>0?{step:step-1,prepared:true}:{step:0,prepared:false};
+  if(step>=total)return {step,prepared:false};
+  return prepared?{step:step+1,prepared:false}:{step,prepared:true};
+}
+
 export function revealedCells(events = [], step = events.length) {
   return new Set(events.slice(0, Math.max(0, step)).map(e => cellKey(e.teamId, e.problem)));
 }
