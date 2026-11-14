@@ -7,7 +7,7 @@ import {SITE_CONFIG} from './site-config.mjs';
 
 const $=id=>document.getElementById(id);
 const format=new Intl.NumberFormat('ru-RU');
-const state={contest:null,timeline:null,config:{duration:300,hidden:60,from:68,to:1},step:0,prepared:false,playing:false,view:'board',query:'',rows:[],timer:null,selectedTeam:null,importing:false,finished:false,currentRoster:null};
+const state={contest:null,timeline:null,config:{duration:300,hidden:60,from:68,to:1},step:0,prepared:false,awardTeamId:null,playing:false,view:'board',query:'',rows:[],timer:null,selectedTeam:null,importing:false,finished:false,currentRoster:null};
 let toastTimer,dragDepth=0,importVersion=0,lastScrubberTarget=null;
 
 function icon(name){
@@ -21,6 +21,7 @@ const configFreeze=config=>config.hidden===0?Infinity:config.duration-config.hid
 const freezeMinute=()=>configFreeze(state.config);
 const currentEvent=()=>state.step>0?state.timeline.events[state.step-1]:null;
 const activeEvent=()=>state.prepared?state.timeline?.events[state.step]:currentEvent();
+const activeTeamId=()=>state.awardTeamId??activeEvent()?.teamId;
 const eventProblems=event=>event.problems??[event.problem];
 const normalized=value=>String(value).toLocaleLowerCase('ru');
 const matches=team=>!state.query||normalized(team.name).includes(state.query)||team.id.includes(state.query);
@@ -38,12 +39,26 @@ function play(){
 function advance(direction=1,automatic=false){
   if(!state.timeline||state.importing||state.contest?.rosterOnly)return;
   if(!automatic)stop();
-  if(direction>0&&awards.hasPending()){if(automatic)stop();else{awards.showPending();renderPlayback();}return;}
+  const pendingAward=awards.pendingEntry();
+  if(direction>0&&pendingAward){
+    if(automatic)stop();
+    else if(state.awardTeamId===pendingAward.team.id){awards.showPending(state.awardTeamId);renderPlayback();}
+    else{
+      state.awardTeamId=pendingAward.team.id;state.prepared=false;
+      if(!matches(pendingAward.team)){state.query='';$('search').value='';}
+      if(state.view!=='board')setView('board');
+      render({follow:true,motionTeamId:state.awardTeamId});
+    }
+    return;
+  }
+  if(direction<0&&state.awardTeamId!==null){state.awardTeamId=null;render({follow:true,motionTeamId:activeTeamId()});return;}
+  if(direction>0&&state.step>=state.timeline.events.length&&!state.prepared)return;
+  state.awardTeamId=null;
   const next=stepPlayback(state,state.timeline.events.length,direction);
   state.step=next.step;state.prepared=next.prepared;
   state.finished=!state.prepared&&state.step===state.timeline.events.length&&state.step>0;
   if(state.finished){clearTimeout(state.timer);state.timer=null;state.playing=false;}
-  render({follow:direction>0,motionTeamId:activeEvent()?.teamId});
+  render({follow:direction>0,motionTeamId:activeTeamId()});
   if(automatic&&awards.hasPending())stop();
 }
 function moveTo(value,automatic=false){
@@ -51,7 +66,7 @@ function moveTo(value,automatic=false){
   if(!automatic)stop();
   const previous=state.step;
   state.step=Math.max(0,Math.min(state.timeline.events.length,Number(value)||0));
-  state.prepared=false;
+  state.prepared=false;state.awardTeamId=null;
   state.finished=state.step===state.timeline.events.length&&state.step>0;
   if(state.finished){clearTimeout(state.timer);state.timer=null;state.playing=false;}
   const motionTeamId=state.timeline.events[(state.step>previous?state.step:previous)-1]?.teamId;
@@ -87,14 +102,14 @@ function applyConfig(event){
   try{
     const config=validatedConfig();
     const timeline=buildTimeline(state.contest,{freeze:configFreeze(config),from:config.from,to:config.to});
-    stop();state.config=config;state.timeline=timeline;state.step=0;state.prepared=false;state.finished=false;
+    stop();state.config=config;state.timeline=timeline;state.step=0;state.prepared=false;state.awardTeamId=null;state.finished=false;
     $('settings-error').hidden=true;render();toast('Настройки применены. Раскрытие начнётся с первого шага.');
   }catch(error){text('settings-error',error.message);$('settings-error').hidden=false;}
 }
 
 function commitContest(contest,label,config,timeline,datasetKey=null){
   if(!contest.rosterOnly&&state.currentRoster)contest=bindRoster(contest,state.currentRoster).contest;
-  stop();state.contest=contest;state.config=config;state.timeline=timeline;state.step=0;state.prepared=false;state.query='';state.selectedTeam=null;state.finished=false;
+  stop();state.contest=contest;state.config=config;state.timeline=timeline;state.step=0;state.prepared=false;state.awardTeamId=null;state.query='';state.selectedTeam=null;state.finished=false;
   state.view=contest.rosterOnly?'roster':'board';document.body.classList.toggle('roster-only',!!contest.rosterOnly);document.title='Monitor — '+label;
   document.querySelectorAll('[data-view]').forEach(button=>{const active=button.dataset.view===state.view;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));button.disabled=!!contest.rosterOnly&&button.dataset.view!=='roster';});
   awards.loadContest(contest);
@@ -261,7 +276,7 @@ function renderBoard({follow=false,motionTeamId}={}){
     }
     $('score-head').replaceChildren(header);$('score-head').dataset.problems=state.contest.problems.join(',');
   }
-  const selected=new Set(state.timeline.selectedIds),event=activeEvent(),fragment=document.createDocumentFragment(),revealed=revealedCells(state.timeline.events,state.step);
+  const selected=new Set(state.timeline.selectedIds),activeId=activeTeamId(),fragment=document.createDocumentFragment(),revealed=revealedCells(state.timeline.events,state.step);
   const bands=new Map();let band=0,previousSolved=null;
   for(const row of state.rows){if(previousSolved!==null&&previousSolved!==row.solved)band=1-band;bands.set(row.team.id,band);previousSolved=row.solved;}
   const rows=state.rows.filter(row=>matches(row.team));
@@ -269,7 +284,7 @@ function renderBoard({follow=false,motionTeamId}={}){
   for(const row of rows){
     const tr=node('tr','score-band-'+bands.get(row.team.id));tr.dataset.teamId=row.team.id;
     if(!selected.has(row.team.id))tr.classList.add('out-of-range');
-    if(event?.teamId===row.team.id)tr.classList.add('active-row');
+    if(activeId===row.team.id)tr.classList.add('active-row');
     tr.append(node('td','rank-cell',row.rank));
     const teamCell=node('td','team-cell'),name=node('button','team-name',row.team.name);name.type='button';name.title=row.team.name;name.dataset.team=row.team.id;teamCell.append(name);
     const honor=decorations.get(row.team.id);
@@ -313,11 +328,12 @@ function renderSubmissions(){
 
 function renderPlayback(){
   const ready=!!state.contest&&!state.importing&&!state.contest.rosterOnly,total=state.timeline?.events.length??0,event=currentEvent(),target=activeEvent();
-  const pendingAward=ready&&awards.hasPending(),nextHint=pendingAward?'→ показать диплом':state.finished?'диапазон раскрыт':'→ выбрать следующую команду';
-  $('play').disabled=!ready||!total||pendingAward;$('next').disabled=!ready||(state.step>=total&&!pendingAward);$('previous').disabled=!ready||(state.step===0&&!state.prepared);
+  const pendingAward=ready?awards.pendingEntry():null,awardRow=state.rows.find(row=>row.team.id===state.awardTeamId),awardPrepared=!!pendingAward&&pendingAward.team.id===state.awardTeamId;
+  const nextHint=pendingAward?awardPrepared?'→ показать диплом':'→ выделить команду для награждения':state.finished?'диапазон раскрыт':'→ выбрать следующую команду';
+  $('play').disabled=!ready||!total||!!pendingAward;$('next').disabled=!ready||(state.step>=total&&!pendingAward);$('previous').disabled=!ready||(state.step===0&&!state.prepared&&state.awardTeamId===null);
   $('next').title=state.prepared?'Показать результат (→)':'Выбрать команду (→)';
-  if(pendingAward)$('next').title='Показать диплом (→)';
-  $('next').dataset.phase=pendingAward?'award':state.prepared?'reveal':'select';
+  if(pendingAward)$('next').title=awardPrepared?'Показать диплом (→)':'Выделить команду для награждения (→)';
+  $('next').dataset.phase=pendingAward?awardPrepared?'award':'award-select':state.prepared?'reveal':'select';
   $('finish').disabled=!ready||state.finished;$('reset').disabled=!ready;$('scrubber').disabled=!ready||!total;
   const progress=revealProgress(state.timeline?.events??[],state.step);
   $('scrubber').max=progress.total;$('scrubber').value=progress.opened;text('step-counter',`${progress.opened} / ${progress.total}`);
@@ -326,13 +342,14 @@ function renderPlayback(){
   $('play').classList.toggle('playing',state.playing);$('play').setAttribute('aria-label',state.playing?'Приостановить разморозку':state.finished?'Повторить разморозку':'Начать разморозку');
   if(state.importing)text('playback-caption','Загружаем данные…');
   else if(state.contest?.rosterOnly)text('playback-caption','Текущий тур: составы готовы. Результаты подключаются отдельным логом.');
+  else if(awardRow)text('playback-caption',`${shortName(awardRow.team.name)} · место ${awardRow.rank} · ${awardPrepared?'к награждению':'диплом показан'} · ${nextHint}`);
   else if(state.prepared&&target){const team=state.contest.teams.find(t=>t.id===target.teamId);text('playback-caption',`${shortName(team.name)} · → показать результат`);}
   else if(event){const team=state.contest.teams.find(t=>t.id===event.teamId);text('playback-caption',`${shortName(team.name)} · ${eventProblems(event).join(', ')} · ${event.accepted?'принято':'не принято'} · ${nextHint}`);}
   else text('playback-caption',pendingAward?'→ показать готовый диплом':total?'→ выбрать команду, ещё → показать результат':'Нет скрытых задач в этом диапазоне');
   const percent=progress.total?progress.opened/progress.total*100:0;$('scrubber').style.background=`linear-gradient(to right,#6983b7 ${percent}%,#ccc ${percent}%)`;
   $('apply-settings').disabled=!ready;$('upload-open').disabled=state.importing;$('load-demo').disabled=state.importing;$('dataset-select').disabled=state.importing;
   if(state.contest)renderSummary();
-  text('announcement',state.prepared&&target?`Выбрана ${shortName(state.contest.teams.find(t=>t.id===target.teamId).name)}. Нажмите стрелку вправо, чтобы показать результат.`:event?`${shortName(state.contest.teams.find(t=>t.id===event.teamId).name)}, ${eventProblems(event).length===1?'задача':'задачи'} ${eventProblems(event).join(', ')}: ${event.accepted?'принято':'не принято'}, место ${event.afterRank}.`:'');
+  text('announcement',awardRow?`${shortName(awardRow.team.name)}, место ${awardRow.rank}. ${awardPrepared?'Нажмите стрелку вправо, чтобы показать диплом.':'Диплом показан.'}`:state.prepared&&target?`Выбрана ${shortName(state.contest.teams.find(t=>t.id===target.teamId).name)}. Нажмите стрелку вправо, чтобы показать результат.`:event?`${shortName(state.contest.teams.find(t=>t.id===event.teamId).name)}, ${eventProblems(event).length===1?'задача':'задачи'} ${eventProblems(event).join(', ')}: ${event.accepted?'принято':'не принято'}, место ${event.afterRank}.`:'');
 }
 
 function openTeam(id){
@@ -416,7 +433,7 @@ window.addEventListener('dragover',event=>{if([...event.dataTransfer?.types??[]]
 window.addEventListener('dragleave',event=>{if([...event.dataTransfer?.types??[]].includes('Files')){dragDepth=Math.max(0,dragDepth-1);if(!dragDepth)$('drop-overlay').hidden=true;}});
 window.addEventListener('drop',event=>{event.preventDefault();dragDepth=0;$('drop-overlay').hidden=true;if(event.dataTransfer?.files.length)importFiles(event.dataTransfer.files);});
 
-const awards=mountAwards({getContest:()=>state.contest,getRows:()=>state.contest?.rosterOnly?[]:state.rows,pause:()=>{const playing=state.playing;stop();return playing;},resume:()=>{if(!state.playing)play();},onChange:()=>{if(state.contest?.rosterOnly)syncRegistryDetails();render();},onClose:renderPlayback,notify:toast});
+const awards=mountAwards({getContest:()=>state.contest,getRows:()=>state.contest?.rosterOnly?[]:state.rows,pause:()=>{const playing=state.playing;stop();return playing;},resume:()=>{if(!state.playing)play();},onChange:()=>{state.awardTeamId=null;if(state.contest?.rosterOnly)syncRegistryDetails();render();},onClose:renderPlayback,notify:toast});
 $('team-edit-details').addEventListener('click',()=>{$('team-dialog').close();awards.openSettings(state.selectedTeam);});
 $('dataset-select').replaceChildren(...Object.entries(SITE_CONFIG.datasets).map(([key,dataset])=>{const option=node('option','',dataset.label);option.value=key;return option;}));
 $('dataset-select').value=SITE_CONFIG.defaultDataset;

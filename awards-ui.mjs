@@ -75,9 +75,9 @@ export function mountAwards({getContest,getRows,pause,resume,onChange,onClose=()
  function closeCeremony(){$('ceremony-dialog').close();}
  function nextCard(){if(index>=entries.length-1)closeCeremony();else{index++;renderCard();}}
  function pendingEntry(){return !auto||getContest()?.rosterOnly?null:nextCeremonyEntry(getRows(),rules,seen);}
- function showPending(){
+ function showPending(teamId){
   if($('awards-dialog').open||$('ceremony-dialog').open)return false;
-  const row=pendingEntry();if(!row)return false;
+  const row=pendingEntry();if(!row||(teamId!==undefined&&row.team.id!==teamId))return false;
   resumable=!!pause();rosterMode=false;entries=[row];index=0;preview=false;autoShow=true;seen.add(row.team.id);photoMode(true);renderCard();$('ceremony-dialog').showModal();return true;
  }
  function observe(){
@@ -100,5 +100,5 @@ export function mountAwards({getContest,getRows,pause,resume,onChange,onClose=()
  $('ceremony-photo').addEventListener('click',()=>photoMode(true));
  $('ceremony-preview').addEventListener('click',()=>{preview=true;autoShow=false;index=0;refreshEntries();});$('ceremony-settings').addEventListener('click',()=>{$('ceremony-dialog').close();openSettings();});$('ceremony-resume').addEventListener('click',()=>{closeCeremony();resume();});
  $('ceremony-dialog').addEventListener('keydown',event=>{if(event.target.tagName==='SELECT')return;if(event.key==='ArrowRight'||event.code==='Space'){event.preventDefault();event.stopPropagation();if(!event.repeat)nextCard();}else if(event.key==='ArrowLeft'){event.preventDefault();event.stopPropagation();if(!event.repeat){index=Math.max(0,index-1);renderCard();}}});
- return {loadContest,observe,decorations,openSettings,showRosterCard,showPending,hasPending:()=>!!pendingEntry(),setTeamDetails,detailsFor:id=>details[id]??{},rules:()=>rules};
+ return {loadContest,observe,decorations,openSettings,showRosterCard,showPending,pendingEntry,hasPending:()=>!!pendingEntry(),setTeamDetails,detailsFor:id=>details[id]??{},rules:()=>rules};
 }
