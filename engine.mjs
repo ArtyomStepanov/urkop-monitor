@@ -1,4 +1,4 @@
-const VERDICTS = /^(Accepted|Wrong answer|Presentation error|Time limit exceeded|Memory limit exceeded|Output limit exceeded|Idleness limit exceeded|Runtime error(?: \([^\r\n]+\))?|Compilation error(?: \([^\r\n]+\))?|Security violation|Restricted function)$/i;
+const VERDICTS = /^(Accepted|Wrong answer|Presentation error|Time limit exceeded|Memory limit exceeded|Output limit exceeded|Idleness limit exceeded|Runtime error(?: \([^\r\n]+\))?|Compilation error(?: \([^\r\n]+\))?|Checker failed|Security violation|Restricted function)$/i;
 const compareIds = new Intl.Collator('en',{numeric:true}).compare;
 const emptyCell = () => ({solved:false,wrong:0,time:null,penalty:0,pending:0,attempts:0,firstPending:null});
 
@@ -39,6 +39,7 @@ export function parseContest(logText, teamsText = '') {
   if (!submissions.length) throw new Error('Лог пуст. Выберите файл full.log.');
   if (teams.size > 2000 || submissions.length > 100_000 || problems.size > 60) throw new Error('Лимит: 2000 команд, 100 000 посылок и 60 задач.');
   submissions.sort((a, b) => a.minute - b.minute || a.id - b.id);
+  if([...problems].every(problem=>/^[A-Z]$/.test(problem))){const last=Math.max(...[...problems].map(problem=>problem.charCodeAt(0)));for(let code=65;code<=last;code++)problems.add(String.fromCharCode(code));}
   return { teams: [...teams.values()], problems: [...problems].sort((a,b)=>a.localeCompare(b, 'en', {numeric:true})), submissions, maxMinute: Math.max(...submissions.map(s => s.minute)) };
 }
 

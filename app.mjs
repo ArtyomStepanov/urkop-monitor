@@ -176,7 +176,7 @@ async function importFiles(fileList){
       label=logFile.name==='full.log'?'Ваш турнир':logFile.name.replace(/\.log$/i,'');
     }
     const contest=parseContest(log,teams);
-    const duration=Math.max(60,Math.ceil((contest.maxMinute+1)/60)*60);
+    const duration=Math.max(300,Math.ceil(contest.maxMinute/60)*60);
     const config={duration,hidden:Math.min(60,duration),from:contest.teams.length,to:1};
     const timeline=buildTimeline(contest,{freeze:configFreeze(config),from:config.from,to:1});
     if(version!==importVersion)return;
@@ -286,7 +286,7 @@ function renderBoard({follow=false,motionTeamId}={}){
     if(!selected.has(row.team.id))tr.classList.add('out-of-range');
     if(activeId===row.team.id)tr.classList.add('active-row');
     tr.append(node('td','rank-cell',row.rank));
-    const teamCell=node('td','team-cell'),name=node('button','team-name',row.team.name);name.type='button';name.title=row.team.name;name.dataset.team=row.team.id;teamCell.append(name);
+    const teamCell=node('td','team-cell'),name=node('button','team-name',row.team.displayName??row.team.name);name.type='button';name.title=row.team.name;name.dataset.team=row.team.id;teamCell.append(name);
     const honor=decorations.get(row.team.id);
     if(honor?.degree){teamCell.classList.add('award-'+honor.degree);const mark=node('span','honor-mark',['','I','II','III'][honor.degree]);mark.title='Диплом '+['','I','II','III'][honor.degree]+' степени';mark.setAttribute('role','img');mark.setAttribute('aria-label',mark.title);teamCell.append(mark);}
     if(honor?.qualified||honor?.wildCard){teamCell.classList.add('is-qualified');const mark=node('span','qualified-mark',honor.qualified?'→':'W');mark.title=(honor.qualified?'Проходит дальше':'Wild card')+' · место в отборе: '+honor.qualifyingRank;mark.setAttribute('role','img');mark.setAttribute('aria-label',mark.title);teamCell.append(mark);}
@@ -357,7 +357,7 @@ function openTeam(id){
 }
 function renderTeam(){
   const row=state.rows.find(row=>row.team.id===state.selectedTeam);if(!row)return;
-  text('team-dialog-id',`КОМАНДА / ${row.team.id}`);text('team-dialog-name',shortName(row.team.name));text('team-dialog-info',teamInfo(row.team.name));
+  text('team-dialog-id',`КОМАНДА / ${row.team.id}`);text('team-dialog-name',row.team.displayName??shortName(row.team.name));text('team-dialog-info',teamInfo(row.team.name));
   text('team-dialog-coach','Тренер: '+(awards.detailsFor(row.team.id).coach||'не указан'));
   const info=[['Место',row.rank],['Решено',row.solved],['Штраф',row.penalty]];
   $('team-summary').replaceChildren(...info.map(([label,value])=>{const el=node('span');el.append(node('strong','',value),document.createTextNode(label));return el;}));

@@ -43,12 +43,26 @@ export function rosterContest(registry,label){
  return {rosterOnly:true,label,teams:registry.teams.map(team=>({id:team.id,name:team.name,displayName:team.name,rosterIssue:team.issue,rosterDetails:{members:team.members.join('\n'),coach:team.coach,organization:''}})),submissions:[],problems:[],maxMinute:0};
 }
 
+const withoutMarker=name=>normalizeTeamName(name).replace(/^\*+\s*/,'');
+function timusTeamLabel(name){
+ const at=name.lastIndexOf(':'),label=name.slice(0,at).trim();
+ if(at<0||!label)return null;
+ const suffix=name.slice(at+1).match(/^\s*([^,()\r\n]+),([^,()\r\n]+),([^,()\r\n]+)\s+\(([^()\r\n]+)\)\s*$/);
+ return suffix&&suffix.slice(1).every(value=>value.trim())?label:null;
+}
+
 export function bindRoster(contest,registry){
- const byName=new Map();for(const team of registry.teams){const key=normalizeTeamName(team.name);if(!byName.has(key))byName.set(key,[]);byName.get(key).push(team);}
- const candidates=contest.teams.map(team=>{const full=normalizeTeamName(team.displayName??team.name),key=byName.has(full)?full:normalizeTeamName(shortName(team.name));return {team,key,matches:byName.get(key)??[]};});
- const counts=new Map();for(const entry of candidates)if(entry.matches.length===1)counts.set(entry.key,(counts.get(entry.key)??0)+1);
+ const byName=new Map(),byUnmarkedName=new Map();
+ for(const team of registry.teams)for(const [index,key] of [[byName,normalizeTeamName(team.name)],[byUnmarkedName,withoutMarker(team.name)]]){if(!index.has(key))index.set(key,[]);index.get(key).push(team);}
+ const candidates=contest.teams.map(team=>{
+  const label=timusTeamLabel(team.name),names=[team.name,team.displayName,shortName(team.name),label].filter(name=>typeof name==='string');
+  const exact=names.map(normalizeTeamName).find(key=>byName.has(key));
+  const fallback=exact===undefined?names.map(withoutMarker).find(key=>byUnmarkedName.has(key)):undefined;
+  return {team,label,matches:exact!==undefined?byName.get(exact):byUnmarkedName.get(fallback)??[]};
+ });
+ const counts=new Map();for(const entry of candidates)if(entry.matches.length===1){const source=entry.matches[0];counts.set(source,(counts.get(source)??0)+1);}
  let matched=0;
- const teams=candidates.map(({team,key,matches})=>{if(matches.length!==1||counts.get(key)!==1)return team;matched++;const source=matches[0];return {...team,displayName:source.name,rosterIssue:source.issue,rosterDetails:{members:source.members.join('\n'),coach:source.coach,organization:''}};});
+ const teams=candidates.map(({team,label,matches})=>{if(matches.length!==1||counts.get(matches[0])!==1)return team;matched++;const source=matches[0],displayName=label??(team.name.trimStart().startsWith('*')?'*'+source.name.replace(/^\*+\s*/,''):source.name);return {...team,displayName,rosterIssue:source.issue,rosterDetails:{members:source.members.join('\n'),coach:source.coach,organization:''}};});
  return {contest:{...contest,teams},matched};
 }
 
